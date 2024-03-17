@@ -36,6 +36,9 @@ import (
 	"github.com/v3io/scaler/pkg/scalertypes"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
+
+	v1beta1 "github.com/nuclio/nuclio/pkg/platform/kube/apis/nuclio.io/v1beta1"
 )
 
 // NuclioResourceScaler leverages github.com/v3io/scaler
@@ -323,6 +326,61 @@ func (n *NuclioResourceScaler) updateFunctionStatus(ctx context.Context,
 }
 
 func (n *NuclioResourceScaler) waitFunctionReadiness(ctx context.Context, namespace string, functionName string) error {
+	n.logger.DebugWithCtx(ctx,
+		"Waiting for function readiness",
+		"functionName", functionName)
+	var functionWatcher watch.Interface
+	var err error
+	functionWatcher, err = n.nuclioClientSet.
+		NuclioV1beta1().
+		NuclioFunctions(namespace).
+		Watch(ctx, metav1.ListOptions{
+			FieldSelector: fmt.Sprintf("metadata.name=%s", functionName),
+		})
+	if err != nil {
+		n.logger.WarnWithCtx(ctx, "Failed watching nuclio function", "functionName", functionName, "err", err)
+		return errors.Wrap(err, "Failed watching nuclio function")
+	}
+	defer functionWatcher.Stop()
+
+	afterCh := time.After(3 * time.Second)
+
+	var function *v1beta1.NuclioFunction
+	for {
+		select {
+		case event := <-functionWatcher.ResultChan():
+			function = event.Object.(*v1beta1.NuclioFunction)
+		case <-afterCh:
+			function, err = n.nuclioClientSet.
+				NuclioV1beta1().
+				NuclioFunctions(namespace).
+				Get(ctx, functionName, metav1.GetOptions{})
+
+			if err != nil {
+				n.logger.WarnWithCtx(ctx, "Failed getting nuclio function", "functionName", functionName, "err", err)
+				return errors.Wrap(err, "Failed getting nuclio function")
+			}
+		}
+
+		if function.Status.State == functionconfig.FunctionStateReady {
+			n.logger.InfoWithCtx(ctx, "Function is ready", "functionName", functionName)
+			break
+		}
+
+		if ctx.Err() != nil {
+			return errors.Wrap(ctx.Err(), "Context error")
+		}
+
+		n.logger.DebugWithCtx(ctx,
+			"Function is not ready yet",
+			"functionName", functionName,
+			"currentState", function.Status.State)
+
+	}
+	return n.verifyReadiness(ctx, function)
+}
+
+func (n *NuclioResourceScaler) waitFunctionReadiness2(ctx context.Context, namespace string, functionName string) error {
 	n.logger.DebugWithCtx(ctx,
 		"Waiting for function readiness",
 		"functionName", functionName)
