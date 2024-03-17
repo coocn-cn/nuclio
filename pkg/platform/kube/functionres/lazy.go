@@ -766,9 +766,18 @@ func (lc *lazyClient) waitFunctionDeploymentReadiness(ctx context.Context,
 		return errors.Wrap(err, "Failed to get function deployment"), ""
 	}
 
+	if functionDeployment.Status.ObservedGeneration != functionDeployment.Generation {
+		lc.logger.DebugWithCtx(ctx,
+			"Deployment is available",
+			"generation", functionDeployment.Generation,
+			"observed", functionDeployment.Status.ObservedGeneration,
+			"functionName", function.Name)
+
+		return errors.New("Function deployment is not ready yet"), ""
+	}
+
 	// find the condition whose type is Available - that's the one we want to examine
 	for _, deploymentCondition := range functionDeployment.Status.Conditions {
-
 		// when we find the right condition, check its Status to see if it's true.
 		// a DeploymentCondition whose Type == Available and Status == True means the deployment is available
 		if deploymentCondition.Type == appsv1.DeploymentAvailable {
@@ -777,7 +786,7 @@ func (lc *lazyClient) waitFunctionDeploymentReadiness(ctx context.Context,
 			if available && functionDeployment.Status.UnavailableReplicas == 0 {
 				lc.logger.DebugWithCtx(ctx,
 					"Deployment is available",
-					"reason", deploymentCondition.Reason,
+					"condition", deploymentCondition,
 					"functionName", function.Name)
 				return nil, functionconfig.FunctionStateReady
 			}
