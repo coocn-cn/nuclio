@@ -29,11 +29,13 @@ COPY ./pkg/dashboard/ui /home/nuclio/dashboard/src
 
 # install gulp and bower, cd into the source dir and build to create /home/nuclio/dashboard/src/dist
 # which contains all the necessary files (index.html and assets/ dir)
-RUN npm install -g gulp \
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm install -g gulp \
     && cd /home/nuclio/dashboard/src \
     && rm -rf ./dist ./node_modules ./resources/*/node_modules \
-    && npm install --production \
-    && gulp build --production
+    && npm install --production
+    
+RUN gulp build --production
 
 #
 # Build binary stage: builds the dashboard binary

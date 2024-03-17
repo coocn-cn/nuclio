@@ -19,8 +19,8 @@ KUBECONFIG := $(if $(KUBECONFIG),$(KUBECONFIG),$(HOME)/.kube/config)
 SHELL:=/bin/bash
 
 # upstream repo
-NUCLIO_DOCKER_REPO ?= quay.io/nuclio
-NUCLIO_CACHE_REPO ?= ghcr.io/nuclio
+NUCLIO_DOCKER_REPO ?= registry.cn-hangzhou.aliyuncs.com/coocn
+NUCLIO_CACHE_REPO ?= registry.cn-hangzhou.aliyuncs.com/coocn-cache
 
 # get default os / arch from go env
 NUCLIO_DEFAULT_OS := $(shell go env GOOS)

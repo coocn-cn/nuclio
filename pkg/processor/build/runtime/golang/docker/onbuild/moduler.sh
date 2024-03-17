@@ -31,7 +31,7 @@ if [ ! -f "go.mod" ]; then
 fi
 
 # download missing modules & remove unused modules
-go mod tidy
+go env -w GOPROXY=https://goproxy.cn,direct && go mod tidy
 
 # removing breadcrumbs
 rm -rf /processor_go.mod /processor_go.sum

@@ -24,6 +24,8 @@ ENV CGO_ENABLED=0
 
 COPY go.* ./
 
-RUN go mod download
+RUN go env -w GO111MODULE=on && \
+    go env -w GOPROXY=https://goproxy.cn,direct && \
+    go mod download
 
 COPY . .
