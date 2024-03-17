@@ -112,10 +112,6 @@ func (n *NuclioResourceScaler) GetResources() ([]scalertypes.Resource, error) {
 
 		// don't include functions that aren't in ready state or that min replicas is larger than zero
 		if function.GetComputedMinReplicas() <= 0 && function.Status.State == functionconfig.FunctionStateReady {
-			if function.Spec.ScaleToZero == nil {
-				n.logger.WarnWith("Function missing scale to zero spec. Continuing", "functionName", function.Name)
-				continue
-			}
 
 			scaleResources, err := n.parseScaleResources(function)
 			if err != nil {
@@ -189,27 +185,35 @@ func (n *NuclioResourceScaler) ResolveServiceName(resource scalertypes.Resource)
 
 func (n *NuclioResourceScaler) parseScaleResources(function nuclioio.NuclioFunction) ([]scalertypes.ScaleResource, error) {
 	var scaleResources []scalertypes.ScaleResource
-	for _, scaleResource := range function.Spec.ScaleToZero.ScaleResources {
-		windowSize, err := time.ParseDuration(scaleResource.WindowSize)
-		if err != nil {
-			return nil, errors.Wrap(err, "Failed to parse window size")
-		}
-		scaleResources = append(scaleResources, scalertypes.ScaleResource{
-			MetricName: scaleResource.MetricName,
-			Threshold:  scaleResource.Threshold,
-			WindowSize: scalertypes.Duration{Duration: windowSize},
-		})
+
+	if n.platformConfiguration.ScaleToZero.Mode == platformconfig.DisabledScaleToZeroMode {
+		return nil, errors.New("Platform configuration scale to zero status does not enabled")
 	}
-	for _, scaleResource := range n.platformConfiguration.ScaleToZero.ScaleResources {
-		windowSize, err := time.ParseDuration(scaleResource.WindowSize)
-		if err != nil {
-			return nil, errors.Wrap(err, "Failed to parse window size")
+
+	if function.Spec.ScaleToZero != nil {
+		for _, scaleResource := range function.Spec.ScaleToZero.ScaleResources {
+			windowSize, err := time.ParseDuration(scaleResource.WindowSize)
+			if err != nil {
+				return nil, errors.Wrap(err, "Failed to parse window size")
+			}
+			scaleResources = append(scaleResources, scalertypes.ScaleResource{
+				MetricName: scaleResource.MetricName,
+				Threshold:  scaleResource.Threshold,
+				WindowSize: scalertypes.Duration{Duration: windowSize},
+			})
 		}
-		scaleResources = append(scaleResources, scalertypes.ScaleResource{
-			MetricName: scaleResource.MetricName,
-			Threshold:  scaleResource.Threshold,
-			WindowSize: scalertypes.Duration{Duration: windowSize},
-		})
+	} else {
+		for _, scaleResource := range n.platformConfiguration.ScaleToZero.ScaleResources {
+			windowSize, err := time.ParseDuration(scaleResource.WindowSize)
+			if err != nil {
+				return nil, errors.Wrap(err, "Failed to parse window size")
+			}
+			scaleResources = append(scaleResources, scalertypes.ScaleResource{
+				MetricName: scaleResource.MetricName,
+				Threshold:  scaleResource.Threshold,
+				WindowSize: scalertypes.Duration{Duration: windowSize},
+			})
+		}
 	}
 	return scaleResources, nil
 }
