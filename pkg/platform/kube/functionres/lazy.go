@@ -768,7 +768,7 @@ func (lc *lazyClient) waitFunctionDeploymentReadiness(ctx context.Context,
 
 	if functionDeployment.Status.ObservedGeneration != functionDeployment.Generation {
 		lc.logger.DebugWithCtx(ctx,
-			"Deployment is available",
+			"Deployment not available yet",
 			"generation", functionDeployment.Generation,
 			"observed", functionDeployment.Status.ObservedGeneration,
 			"functionName", function.Name)
