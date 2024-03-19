@@ -72,11 +72,11 @@ func (g *golang) GetProcessorDockerfileInfo(runtimeConfig *runtimeconfig.Config,
 		!strings.Contains(g.FunctionConfig.Spec.Build.BaseImage, "alpine") {
 
 		// use non-alpine based image
-		onbuildImage = "%s/nuclio/handler-builder-golang-onbuild:%s-%s"
+		onbuildImage = "%s/coocn/handler-builder-golang-onbuild:%s-%s"
 	} else {
 
 		// use alpine based image
-		onbuildImage = "%s/nuclio/handler-builder-golang-onbuild:%s-%s-alpine"
+		onbuildImage = "%s/coocn/handler-builder-golang-onbuild:%s-%s-alpine"
 	}
 
 	// fill onbuild artifact

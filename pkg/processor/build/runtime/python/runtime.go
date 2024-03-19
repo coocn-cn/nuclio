@@ -100,7 +100,7 @@ func (p *python) GetProcessorDockerfileInfo(runtimeConfig *runtimeconfig.Config,
 		OnbuildArtifacts: []runtime.Artifact{
 			{
 				Name: "python-onbuild",
-				Image: fmt.Sprintf("%s/nuclio/handler-builder-python-onbuild:%s-%s",
+				Image: fmt.Sprintf("%s/coocn/handler-builder-python-onbuild:%s-%s",
 					onbuildImageRegistry,
 					p.VersionInfo.Label,
 					p.VersionInfo.Arch),

@@ -48,7 +48,7 @@ func (n *nodejs) GetProcessorDockerfileInfo(runtimeConfig *runtimeconfig.Config,
 	// fill onbuild artifact
 	artifact := runtime.Artifact{
 		Name: "nodejs-onbuild",
-		Image: fmt.Sprintf("%s/nuclio/handler-builder-nodejs-onbuild:%s-%s",
+		Image: fmt.Sprintf("%s/coocn/handler-builder-nodejs-onbuild:%s-%s",
 			onbuildImageRegistry,
 			n.VersionInfo.Label,
 			n.VersionInfo.Arch),

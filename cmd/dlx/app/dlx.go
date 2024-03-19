@@ -17,6 +17,11 @@ limitations under the License.
 package app
 
 import (
+	"context"
+	"net/http"
+	"sync"
+
+	"github.com/nuclio/logger"
 	"github.com/nuclio/nuclio/pkg/common"
 	"github.com/nuclio/nuclio/pkg/loggersink"
 	nuclioioclient "github.com/nuclio/nuclio/pkg/platform/kube/client/clientset/versioned"
@@ -25,6 +30,7 @@ import (
 
 	"github.com/nuclio/errors"
 	"github.com/v3io/scaler/pkg/dlx"
+	"github.com/v3io/scaler/pkg/scalertypes"
 	"k8s.io/client-go/rest"
 
 	// load all sinks
@@ -50,6 +56,64 @@ func Run(platformConfigurationPath string,
 		return errors.Wrap(err, "Failed to start dlx")
 	}
 	select {}
+}
+
+type scaler struct {
+	scalertypes.ResourceScaler
+
+	logger       logger.Logger
+	server       *http.Server
+	readinessMap sync.Map
+}
+
+func New(parentLogger logger.Logger, resourceScaler scalertypes.ResourceScaler, listenAddress string) scalertypes.ResourceScaler {
+	childLogger := parentLogger.GetChild("dlx")
+
+	return &scaler{
+		ResourceScaler: resourceScaler,
+		logger:         childLogger,
+		server: &http.Server{
+			Addr: listenAddress,
+		},
+	}
+}
+
+func (s *scaler) Start() error {
+	s.logger.DebugWith("Starting", "server", s.server.Addr)
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		name := r.URL.Query().Get("resource")
+		if ch, exist := s.readinessMap.Load(name); exist {
+			ch.(chan bool) <- true
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	go s.server.ListenAndServe() // nolint: errcheck
+	return nil
+}
+
+func (s *scaler) SetScaleCtx(ctx context.Context, resources []scalertypes.Resource, scale int) error {
+	if scale > 0 {
+		for _, resource := range resources {
+			s.readinessMap.Store(resource.Namespace+"::"+resource.Name, make(chan bool, 1))
+		}
+	}
+	defer func() {
+		for _, resource := range resources {
+			ch, exist := s.readinessMap.Load(resource.Namespace + "::" + resource.Name)
+
+			s.readinessMap.Delete(resource.Namespace + "::" + resource.Name)
+			if exist {
+				close(ch.(chan bool))
+			}
+		}
+	}()
+
+	return s.ResourceScaler.SetScaleCtx(ctx, resources, scale)
 }
 
 func newDLX(platformConfigurationPath string,
@@ -84,6 +148,8 @@ func newDLX(platformConfigurationPath string,
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to create resource scaler")
 	}
+
+	resourceScaler = New(rootLogger, resourceScaler, ":8088")
 
 	// NOTE: hacky, making sure that argument passes to the struct itself
 	// on 1.5.x both dlx/autoscaler were merged onto nuclio from v3io/scaler to stop using v3io/scaler as a plugin

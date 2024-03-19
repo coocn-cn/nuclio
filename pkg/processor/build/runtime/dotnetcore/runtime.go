@@ -40,7 +40,7 @@ func (d *dotnetcore) GetProcessorDockerfileInfo(runtimeConfig *runtimeconfig.Con
 	// fill onbuild artifact
 	artifact := runtime.Artifact{
 		Name: "dotnetcore-onbuild",
-		Image: fmt.Sprintf("%s/nuclio/handler-builder-dotnetcore-onbuild:%s-%s",
+		Image: fmt.Sprintf("%s/coocn/handler-builder-dotnetcore-onbuild:%s-%s",
 			onbuildImageRegistry,
 			d.VersionInfo.Label,
 			d.VersionInfo.Arch),
