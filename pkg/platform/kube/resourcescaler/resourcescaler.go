@@ -353,7 +353,12 @@ func (n *NuclioResourceScaler) waitFunctionReadiness(ctx context.Context, namesp
 	for {
 		select {
 		case event := <-functionWatcher.ResultChan():
-			function = event.Object.(*v1beta1.NuclioFunction)
+			switch event.Type {
+			case watch.Added, watch.Modified:
+				function = event.Object.(*v1beta1.NuclioFunction)
+			default:
+				function = nil
+			}
 		case <-afterCh:
 			function, err = n.nuclioClientSet.
 				NuclioV1beta1().
@@ -364,6 +369,10 @@ func (n *NuclioResourceScaler) waitFunctionReadiness(ctx context.Context, namesp
 				n.logger.WarnWithCtx(ctx, "Failed getting nuclio function", "functionName", functionName, "err", err)
 				return errors.Wrap(err, "Failed getting nuclio function")
 			}
+		}
+
+		if function == nil {
+			continue
 		}
 
 		if function.Status.State == functionconfig.FunctionStateReady {
@@ -421,6 +430,7 @@ func (n *NuclioResourceScaler) waitFunctionReadiness2(ctx context.Context, names
 func (n *NuclioResourceScaler) verifyReadiness(ctx context.Context, function *nuclioio.NuclioFunction) error {
 	if !n.functionReadinessVerificationEnabled {
 		n.logger.DebugWithCtx(ctx, "Skipping function readiness verification")
+		return nil
 	}
 
 	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080%s",

@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/nuclio/nuclio/cmd/dlx/app/dlx"
 	"github.com/nuclio/nuclio/pkg/common"
 	"github.com/nuclio/nuclio/pkg/errgroup"
 	"github.com/nuclio/nuclio/pkg/functionconfig"
@@ -83,6 +85,8 @@ type lazyClient struct {
 	classLabels                   labels.Set
 	platformConfigurationProvider PlatformConfigurationProvider
 	nodeScaleUpSleepTimeout       time.Duration
+	dlxRedirectPortIter           int
+	dlxRedirectPortLock           sync.Mutex
 }
 
 func NewLazyClient(parentLogger logger.Logger,
@@ -100,6 +104,8 @@ func NewLazyClient(parentLogger logger.Logger,
 		// autoscale cycle is at least 10s.
 		// We saw that this value was not enough in GKE and AKS, so to mitigate the wait was increased to 60 sec
 		nodeScaleUpSleepTimeout: 60 * time.Second,
+		dlxRedirectPortIter:     0,
+		dlxRedirectPortLock:     sync.Mutex{},
 	}
 
 	newClient.initClassLabels()
@@ -251,6 +257,61 @@ func (lc *lazyClient) UpdatedServiceSelectorWhenScaledFromZero(ctx context.Conte
 
 	functionLabels[common.NuclioResourceLabelKeyFunctionName] = function.Name
 	functionLabels[common.NuclioLabelKeyFunctionVersion] = common.FunctionTagLatest
+
+	if true {
+		service, err := lc.kubeClientSet.CoreV1().Services(function.Namespace).Get(ctx, kube.ServiceNameFromFunctionName(function.Name), metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+
+		spec := &service.Spec
+
+		functionHTTPPort := function.Spec.GetHTTPPort()
+		serviceTypeIsNodePort := spec.Type == v1.ServiceTypeNodePort
+
+		spec.Ports = []v1.ServicePort{
+			{
+				Name: abstract.FunctionContainerHTTPPortName,
+				Port: int32(abstract.FunctionContainerHTTPPort),
+			},
+		}
+		if serviceTypeIsNodePort {
+			spec.Ports[0].NodePort = int32(functionHTTPPort)
+		} else {
+			spec.Ports[0].NodePort = 0
+		}
+		lc.logger.DebugWithCtx(ctx,
+			"Updating service node port",
+			"functionName", function.Name,
+			"ports", spec.Ports)
+
+		// add additional ports for sidecars
+		if function.Spec.Sidecars != nil {
+			if spec.Ports == nil || len(spec.Ports) == 0 {
+				spec.Ports = []v1.ServicePort{}
+			}
+			for _, sidecar := range function.Spec.Sidecars {
+				for _, port := range sidecar.Ports {
+					spec.Ports = lc.addOrUpdatePort(spec.Ports, v1.ServicePort{
+						Name:       sidecar.Name,
+						Port:       port.ContainerPort,
+						TargetPort: intstr.FromInt(int(port.ContainerPort)),
+					})
+				}
+			}
+		}
+
+		// check if platform requires additional ports
+		platformServicePorts := lc.getServicePortsFromPlatform(lc.platformConfigurationProvider.GetPlatformConfiguration())
+
+		// make sure the ports exist (add if not)
+		spec.Ports = lc.ensureServicePortsExist(spec.Ports, platformServicePorts)
+		spec.Selector = functionLabels
+
+		_, err = lc.kubeClientSet.CoreV1().Services(function.Namespace).Update(ctx, service, metav1.UpdateOptions{})
+
+		return err
+	}
 
 	// marshal labels to json
 	patchBytes, err := json.Marshal(map[string]interface{}{
@@ -2060,6 +2121,54 @@ func (lc *lazyClient) serializeFunctionJSON(function *nuclioio.NuclioFunction) (
 	return pbody.String(), nil
 }
 
+func (lc *lazyClient) allowDlxRedirectPort(ctx context.Context, function *nuclioio.NuclioFunction) (int, error) {
+	lc.dlxRedirectPortLock.Lock()
+	defer lc.dlxRedirectPortLock.Unlock()
+
+	lc.dlxRedirectPortIter--
+	redirectPort := int(math.Abs(float64(lc.dlxRedirectPortIter)))
+
+	if redirectPort == 0 {
+		services, err := lc.kubeClientSet.CoreV1().Services(function.Namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return 0, err
+		}
+
+		var max, min = 0, 0
+		for _, svc := range services.Items {
+			for name, _ := range svc.Labels {
+				if !strings.HasPrefix(name, dlx.NuclioResourceLabelKeyScaleToZeroPort) {
+					continue
+				}
+
+				port, err := strconv.Atoi(strings.TrimPrefix(name, dlx.NuclioResourceLabelKeyScaleToZeroPort+"-"))
+				if err != nil {
+					continue
+				}
+
+				if max < port {
+					max = port
+				}
+				if min > port {
+					min = port
+				}
+			}
+		}
+
+		const MAX_PORT, MIN_PORT = 65500, 1
+		if MAX_PORT-max > min-MIN_PORT {
+			lc.dlxRedirectPortIter = -max
+		} else {
+			lc.dlxRedirectPortIter = min
+		}
+
+		lc.dlxRedirectPortIter--
+		redirectPort = int(math.Abs(float64(lc.dlxRedirectPortIter)))
+	}
+
+	return redirectPort, nil
+}
+
 func (lc *lazyClient) populateServiceSpec(ctx context.Context,
 	functionLabels labels.Set,
 	function *nuclioio.NuclioFunction,
@@ -2131,6 +2240,21 @@ func (lc *lazyClient) populateServiceSpec(ctx context.Context,
 
 	// make sure the ports exist (add if not)
 	spec.Ports = lc.ensureServicePortsExist(spec.Ports, platformServicePorts)
+
+	if function.Status.State == functionconfig.FunctionStateScaledToZero ||
+		function.Status.State == functionconfig.FunctionStateWaitingForScaleResourcesToZero ||
+		// when scaling from zero we patch the service selector only after all other resources are ready
+		function.Status.State == functionconfig.FunctionStateWaitingForScaleResourcesFromZero {
+
+		for i, port := range spec.Ports {
+			redirctPort, err := lc.allowDlxRedirectPort(ctx, function)
+			if err != nil {
+				return
+			}
+			spec.Ports[i].TargetPort = intstr.FromInt(redirctPort)
+			functionLabels[fmt.Sprintf("%s-%d", dlx.NuclioResourceLabelKeyScaleToZeroPort, redirctPort)] = strconv.Itoa(int(port.Port))
+		}
+	}
 }
 
 func (lc *lazyClient) addOrUpdatePort(ports []v1.ServicePort, port v1.ServicePort) []v1.ServicePort {

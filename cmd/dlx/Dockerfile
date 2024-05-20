@@ -32,7 +32,7 @@ RUN go build \
 FROM $ALPINE_IMAGE
 
 RUN apk upgrade --no-cache \
-    && apk add --no-cache ca-certificates
+    && apk add --no-cache ca-certificates iptables
 
 # copy dlx binary from build stage
 COPY --from=build-dlx /nuclio/dlx /usr/local/bin

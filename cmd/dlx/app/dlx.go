@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	"github.com/nuclio/logger"
+	"github.com/nuclio/nuclio/cmd/dlx/app/dlx"
 	"github.com/nuclio/nuclio/pkg/common"
 	"github.com/nuclio/nuclio/pkg/loggersink"
 	nuclioioclient "github.com/nuclio/nuclio/pkg/platform/kube/client/clientset/versioned"
@@ -29,8 +30,8 @@ import (
 	"github.com/nuclio/nuclio/pkg/platformconfig"
 
 	"github.com/nuclio/errors"
-	"github.com/v3io/scaler/pkg/dlx"
 	"github.com/v3io/scaler/pkg/scalertypes"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	// load all sinks
@@ -42,11 +43,14 @@ func Run(platformConfigurationPath string,
 	kubeconfigPath string,
 	functionReadinessVerificationEnabled bool) error {
 
+	tcpListenAddress := common.GetEnvOrDefaultString("NUCLIO_DLX_TCP_LISTEN_ADDRESS", ":65530")
+
 	// create dlx
 	dlxInstance, err := newDLX(platformConfigurationPath,
 		namespace,
 		kubeconfigPath,
-		functionReadinessVerificationEnabled)
+		functionReadinessVerificationEnabled,
+		tcpListenAddress)
 	if err != nil {
 		return errors.Wrap(err, "Failed to create dlx")
 	}
@@ -119,7 +123,8 @@ func (s *scaler) SetScaleCtx(ctx context.Context, resources []scalertypes.Resour
 func newDLX(platformConfigurationPath string,
 	namespace string,
 	kubeconfigPath string,
-	functionReadinessVerificationEnabled bool) (*dlx.DLX, error) {
+	functionReadinessVerificationEnabled bool,
+	tcpListenAddress string) (*dlx.DLX, error) {
 
 	// get platform configuration
 	platformConfiguration, err := platformconfig.NewPlatformConfig(platformConfigurationPath)
@@ -136,6 +141,11 @@ func newDLX(platformConfigurationPath string,
 	restConfig, err := common.GetClientConfig(kubeconfigPath)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to get client configuration")
+	}
+
+	kubeClientSet, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed to create k8s client set")
 	}
 
 	nuclioClientSet, err := nuclioioclient.NewForConfig(restConfig)
@@ -155,7 +165,7 @@ func newDLX(platformConfigurationPath string,
 	// on 1.5.x both dlx/autoscaler were merged onto nuclio from v3io/scaler to stop using v3io/scaler as a plugin
 	// this intermediate work status does not allow us (yet) the flexibility to inject
 	// arguments via the resourcescaler structure and hence, we will cast it (it is safe) and set the argument.
-	resourceScaler.(*resourcescaler.NuclioResourceScaler).SetFunctionReadinessVerificationEnabled(functionReadinessVerificationEnabled)
+	resourceScaler.(*scaler).ResourceScaler.(*resourcescaler.NuclioResourceScaler).SetFunctionReadinessVerificationEnabled(functionReadinessVerificationEnabled)
 
 	// get resource scaler configuration
 	resourceScalerConfig, err := resourceScaler.GetConfig()
@@ -164,7 +174,7 @@ func newDLX(platformConfigurationPath string,
 	}
 
 	// create dlx instance
-	dlxInstance, err := dlx.NewDLX(rootLogger, resourceScaler, resourceScalerConfig.DLXOptions)
+	dlxInstance, err := dlx.NewDLX(rootLogger, kubeClientSet, resourceScaler, dlx.DLXOptions{DLXOptions: resourceScalerConfig.DLXOptions, TCPListenAddress: tcpListenAddress})
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to create dlx instance")
 	}
